@@ -122,6 +122,10 @@ elseif ($role_id == 5) $role_name = "System Admin";
 
             <a href="admin/manage_shelters.php" class="btn btn-primary">Manage Shelters</a>
 
+            <a href="admin/manage_resources.php" class="btn btn-info text-white">Manage Resources</a>
+
+            <a href="admin/manage_evacuation.php" class="btn btn-secondary">Manage Evacuation</a>
+
         </div>
 
         <?php else: ?>
@@ -131,6 +135,10 @@ elseif ($role_id == 5) $role_name = "System Admin";
             <a href="alerts.php" class="btn btn-warning">View Alert</a>
 
             <a href="shelters.php" class="btn btn-info">View Shelters</a>
+
+            <a href="resources.php" class="btn btn-primary">Resources</a>
+
+            <a href="evacuation_status.php" class="btn btn-success">Update Evacuation</a>
 
         </div>
         <?php endif; ?>
