@@ -1170,13 +1170,6 @@ a {
                     <span>Create Alert</span>
                 </a>
 
-                <a href="admin/ai_alerts_list.php" class="action-card">
-                    <div class="ac-icon" style="background:#764ba2;">
-                        <i class="fa-solid fa-list-check"></i>
-                    </div>
-                    <span>View AI Alerts</span>
-                </a>
-
                 <a href="admin/manage_shelters.php" class="action-card">
                     <div class="ac-icon" style="background:#1565c0;">
                         <i class="fa-solid fa-house-chimney"></i>
