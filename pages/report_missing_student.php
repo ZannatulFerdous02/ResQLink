@@ -16,93 +16,84 @@ function e($value)
     return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
-function requestStatusClass($status)
-{
-    switch ($status) {
-        case 'assigned':
-            return 'st-assigned';
-        case 'resolved':
-            return 'st-resolved';
-        case 'cancelled':
-            return 'st-cancelled';
-        default:
-            return 'st-pending';
-    }
-}
-
-function requestPriorityClass($priority)
-{
-    switch ($priority) {
-        case 'critical':
-            return 'pr-critical';
-        case 'high':
-            return 'pr-high';
-        case 'medium':
-            return 'pr-medium';
-        default:
-            return 'pr-low';
-    }
-}
-
-$typeLabels = [
-    'medical' => 'Medical / Injury / Illness',
-    'rescue'  => 'Trapped / Need Rescue',
-    'other'   => 'Other Campus Emergency',
-];
-
-// submit
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $type = trim($_POST['emergency_type'] ?? '');
-    $address = trim($_POST['address'] ?? '');
+    $student_name = trim($_POST['student_name'] ?? '');
+    $student_id_number = trim($_POST['student_id_number'] ?? '');
+    $age = trim($_POST['age'] ?? '');
+    $gender = trim($_POST['gender'] ?? '');
     $description = trim($_POST['description'] ?? '');
-    $lifeThreatening = isset($_POST['life_threatening']);
+    $last_seen_location = trim($_POST['last_seen_location'] ?? '');
+    $last_seen_at = trim($_POST['last_seen_at'] ?? '');
+    $reporter_relationship = trim($_POST['reporter_relationship'] ?? '');
+    $reporter_contact = trim($_POST['reporter_contact'] ?? '');
 
-    $allowedTypes = ['medical', 'rescue', 'other'];
+    $allowedGenders = ['male', 'female', 'other'];
+    $gender = in_array($gender, $allowedGenders, true) ? $gender : null;
+    $age = ($age !== '' && ctype_digit($age)) ? (int)$age : null;
 
-    if (!in_array($type, $allowedTypes, true)) {
-        $error = "Please select a valid emergency type.";
-    } elseif ($address === '' || $description === '') {
-        $error = "Please describe what happened and your exact location on campus.";
+    if ($student_name === '' || $description === '' || $last_seen_location === ''
+        || $last_seen_at === '' || $reporter_relationship === '' || $reporter_contact === '') {
+        $error = "Please fill in all required fields.";
     } else {
-        if ($lifeThreatening) {
-            $priority = 'critical';
-        } elseif ($type === 'other') {
-            $priority = 'medium';
-        } else {
-            $priority = 'high';
-        }
-
         $stmt = $conn->prepare("
-            INSERT INTO emergency_requests (created_by, request_type, description, address, priority, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', NOW())
+            INSERT INTO missing_student_reports
+            (reported_by, student_name, student_id_number, age, gender, description,
+             last_seen_location, last_seen_at, reporter_relationship, reporter_contact, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
         ");
-        $stmt->bind_param("issss", $user_id, $type, $description, $address, $priority);
+        $stmt->bind_param(
+            "ississssss",
+            $user_id,
+            $student_name,
+            $student_id_number,
+            $age,
+            $gender,
+            $description,
+            $last_seen_location,
+            $last_seen_at,
+            $reporter_relationship,
+            $reporter_contact
+        );
 
         if ($stmt->execute()) {
-            $success = "Your emergency request has been sent. The nearest available rescue team will be notified immediately.";
+            $success = "Report submitted. An administrator will review it shortly — you can track its status below.";
         } else {
-            $error = "Failed to send your request. If this is urgent, call 999 immediately.";
+            $error = "Failed to submit the report. Please try again.";
         }
         $stmt->close();
     }
 }
 
-// this user's recent requests
-$myRequests = [];
+// this user's own submitted reports
+$myReports = [];
 $stmt = $conn->prepare("
-    SELECT id, request_type, description, address, priority, status, created_at
-    FROM emergency_requests
-    WHERE created_by = ?
+    SELECT id, student_name, last_seen_location, last_seen_at, status, review_notes, created_at
+    FROM missing_student_reports
+    WHERE reported_by = ?
     ORDER BY created_at DESC
-    LIMIT 5
+    LIMIT 8
 ");
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
 $res = $stmt->get_result();
 while ($row = $res->fetch_assoc()) {
-    $myRequests[] = $row;
+    $myReports[] = $row;
 }
 $stmt->close();
+
+function reportStatusClass($status)
+{
+    switch ($status) {
+        case 'approved':
+            return 'st-assigned';
+        case 'found':
+            return 'st-resolved';
+        case 'rejected':
+            return 'st-cancelled';
+        default:
+            return 'st-pending';
+    }
+}
 
 // Session/user info for dashboard shell
 $username_raw = $_SESSION['full_name'] ?? 'User';
@@ -148,25 +139,21 @@ $uc->close();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Report Emergency - ResQLink</title>
+    <title>Report Missing Student - ResQLink</title>
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
             --accent: #2e7d32;
             --accent-dark: #1b5e20;
             --accent-light: #e8f5e9;
-            --danger: #dc2626;
-            --danger-dark: #b91c1c;
+            --warn: #b45309;
+            --warn-dark: #92400e;
             --sidebar-width: 265px;
             --bg: #f0f2f5;
             --white: #ffffff;
@@ -187,7 +174,6 @@ $uc->close();
 
         a { color: inherit; }
 
-        /* ---------- Sidebar ---------- */
         .sidebar {
             width: var(--sidebar-width);
             background: var(--white);
@@ -221,18 +207,10 @@ $uc->close();
             place-items: center;
         }
 
-        .brand-name {
-            font-size: 18px;
-            font-weight: 800;
-        }
-
+        .brand-name { font-size: 18px; font-weight: 800; }
         .brand-name span { color: var(--accent); }
 
-        .sidebar-nav {
-            flex: 1;
-            padding: 16px 12px;
-            overflow-y: auto;
-        }
+        .sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }
 
         .nav-label {
             display: block;
@@ -257,8 +235,7 @@ $uc->close();
             text-decoration: none;
         }
 
-        .nav-link:hover,
-        .nav-link.active {
+        .nav-link:hover, .nav-link.active {
             background: var(--accent-light);
             color: var(--accent);
         }
@@ -274,14 +251,9 @@ $uc->close();
             border-radius: 20px;
         }
 
-        .sidebar-footer {
-            padding: 14px 12px;
-            border-top: 1px solid var(--border);
-        }
-
+        .sidebar-footer { padding: 14px 12px; border-top: 1px solid var(--border); }
         .logout { color: #dc2626; }
 
-        /* ---------- Main ---------- */
         .main {
             margin-left: var(--sidebar-width);
             width: calc(100% - var(--sidebar-width));
@@ -304,11 +276,7 @@ $uc->close();
         .topbar-title h1 { font-size: 17px; font-weight: 800; }
         .topbar-title p { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-        .topbar-right {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .topbar-right { display: flex; align-items: center; gap: 12px; }
 
         .icon-btn {
             width: 38px;
@@ -395,7 +363,7 @@ $uc->close();
             width: 40px;
             height: 40px;
             border-radius: 12px;
-            background: var(--danger);
+            background: var(--warn);
             color: #fff;
             display: grid;
             place-items: center;
@@ -422,40 +390,20 @@ $uc->close();
             border-color: var(--accent);
         }
 
-        /* ---------- Call bar ---------- */
-        .call-bar {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 14px;
+        .info-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 18px;
+            border-radius: var(--radius);
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            color: var(--warn-dark);
+            font-size: 13px;
+            font-weight: 600;
             margin-bottom: 20px;
         }
 
-        .call-btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            padding: 16px;
-            border-radius: var(--radius);
-            text-decoration: none;
-            font-weight: 800;
-            font-size: 15px;
-            color: #fff;
-            background: var(--danger);
-            box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
-        }
-
-        .call-btn i { font-size: 18px; }
-
-        .call-btn:hover { background: var(--danger-dark); color: #fff; }
-
-        .call-btn.secondary {
-            background: #1f2937;
-        }
-
-        .call-btn.secondary:hover { background: #111827; }
-
-        /* ---------- Layout grid ---------- */
         .sos-grid {
             display: grid;
             grid-template-columns: 1.1fr 1fr;
@@ -484,20 +432,15 @@ $uc->close();
             width: 34px;
             height: 34px;
             border-radius: 10px;
-            background: #fef2f2;
-            color: var(--danger);
+            background: #fffbeb;
+            color: var(--warn);
             display: grid;
             place-items: center;
             font-size: 14px;
         }
 
-        .panel-sub {
-            color: var(--muted);
-            font-size: 13px;
-            margin-bottom: 20px;
-        }
+        .panel-sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
 
-        /* ---------- Alerts ---------- */
         .flash {
             display: flex;
             align-items: center;
@@ -509,28 +452,12 @@ $uc->close();
             margin-bottom: 18px;
         }
 
-        .flash-success {
-            background: #e8f5e9;
-            color: #15803d;
-            border: 1px solid #a5d6a7;
-        }
+        .flash-success { background: #e8f5e9; color: #15803d; border: 1px solid #a5d6a7; }
+        .flash-error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
 
-        .flash-error {
-            background: #fef2f2;
-            color: #b91c1c;
-            border: 1px solid #fecaca;
-        }
+        .form-label { font-size: 13px; font-weight: 700; margin-bottom: 6px; display: block; }
 
-        /* ---------- Form ---------- */
-        .form-label {
-            font-size: 13px;
-            font-weight: 700;
-            margin-bottom: 6px;
-            display: block;
-        }
-
-        .form-select,
-        .form-control {
+        .form-select, .form-control {
             border-radius: 10px;
             border: 1px solid var(--border);
             padding: 11px 14px;
@@ -538,35 +465,13 @@ $uc->close();
             font-family: inherit;
         }
 
-        .form-select:focus,
-        .form-control:focus {
-            border-color: var(--danger);
-            box-shadow: 0 0 0 0.2rem rgba(220, 38, 38, 0.15);
+        .form-select:focus, .form-control:focus {
+            border-color: var(--warn);
+            box-shadow: 0 0 0 0.2rem rgba(180, 83, 9, 0.15);
         }
 
         .mb-3 { margin-bottom: 18px; }
-
-        .life-check {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px 14px;
-            border-radius: 10px;
-            background: #fef2f2;
-            border: 1px solid #fecaca;
-        }
-
-        .life-check input {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--danger);
-        }
-
-        .life-check label {
-            font-size: 13px;
-            font-weight: 700;
-            color: var(--danger-dark);
-        }
+        .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
         .btn-sos {
             display: inline-flex;
@@ -576,7 +481,7 @@ $uc->close();
             width: 100%;
             padding: 13px 22px;
             border-radius: 10px;
-            background: var(--danger);
+            background: var(--warn);
             color: #fff;
             font-size: 15px;
             font-weight: 800;
@@ -585,12 +490,8 @@ $uc->close();
             transition: all .2s ease;
         }
 
-        .btn-sos:hover {
-            background: var(--danger-dark);
-            transform: translateY(-2px);
-        }
+        .btn-sos:hover { background: var(--warn-dark); transform: translateY(-2px); }
 
-        /* ---------- Recent requests ---------- */
         .req-item {
             border: 1px solid var(--border);
             border-radius: 12px;
@@ -609,12 +510,7 @@ $uc->close();
         }
 
         .req-type { font-size: 14px; font-weight: 800; }
-
-        .req-desc {
-            font-size: 13px;
-            color: var(--muted);
-            margin-bottom: 6px;
-        }
+        .req-desc { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 
         .req-meta {
             display: flex;
@@ -641,24 +537,9 @@ $uc->close();
         .st-resolved { background: #15803d; }
         .st-cancelled { background: #6b7280; }
 
-        .pr-critical { background: #b91c1c; }
-        .pr-high { background: #ea580c; }
-        .pr-medium { background: #ca8a04; }
-        .pr-low { background: #15803d; }
+        .no-req { text-align: center; color: var(--muted); padding: 20px 0; }
+        .no-req i { font-size: 36px; color: var(--warn); margin-bottom: 10px; }
 
-        .no-req {
-            text-align: center;
-            color: var(--muted);
-            padding: 20px 0;
-        }
-
-        .no-req i {
-            font-size: 36px;
-            color: var(--danger);
-            margin-bottom: 10px;
-        }
-
-        /* ---------- Sidebar overlay (mobile) ---------- */
         .sidebar-overlay {
             display: none;
             position: fixed;
@@ -671,7 +552,7 @@ $uc->close();
 
         @media (max-width: 900px) {
             .sos-grid { grid-template-columns: 1fr; }
-            .call-bar { grid-template-columns: 1fr; }
+            .row-2 { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 800px) {
@@ -709,7 +590,7 @@ $uc->close();
             <i class="fa-solid fa-robot"></i> AI Emergency Chatbot
         </a>
 
-        <a href="report_emergency.php" class="nav-link active">
+        <a href="report_emergency.php" class="nav-link">
             <i class="fa-solid fa-truck-medical" style="color:#dc2626;"></i> Report Emergency
         </a>
 
@@ -719,7 +600,7 @@ $uc->close();
             <i class="fa-solid fa-user-magnifying-glass"></i> Missing Student Alerts
         </a>
 
-        <a href="report_missing_student.php" class="nav-link">
+        <a href="report_missing_student.php" class="nav-link active">
             <i class="fa-solid fa-person-circle-question" style="color:#b45309;"></i> Report Missing Student
         </a>
 
@@ -766,7 +647,7 @@ $uc->close();
             </button>
 
             <div class="topbar-title">
-                <h1>Report Emergency</h1>
+                <h1>Report Missing Student</h1>
                 <p><?php echo date('l, F j, Y'); ?></p>
             </div>
         </div>
@@ -796,21 +677,17 @@ $uc->close();
     <main class="content">
         <div class="page-head">
             <h2>
-                <span class="ph-icon"><i class="fa-solid fa-truck-medical"></i></span>
-                Campus Emergency SOS
+                <span class="ph-icon"><i class="fa-solid fa-person-circle-question"></i></span>
+                Report a Missing Student
             </h2>
-            <a href="dashboard.php" class="back-btn">
-                <i class="fa-solid fa-arrow-left"></i> Back to Dashboard
+            <a href="missing_students.php" class="back-btn">
+                <i class="fa-solid fa-arrow-left"></i> View Missing Student Alerts
             </a>
         </div>
 
-        <div class="call-bar">
-            <a class="call-btn" href="tel:999">
-                <i class="fa-solid fa-phone"></i> Call 999 (Emergency Hotline)
-            </a>
-            <a class="call-btn secondary" href="tel:+8800000000">
-                <i class="fa-solid fa-phone-volume"></i> Call Campus Security (placeholder number)
-            </a>
+        <div class="info-bar">
+            <i class="fa-solid fa-circle-info"></i>
+            Every report is reviewed by an administrator before it appears publicly on the Missing Student Alerts page.
         </div>
 
         <?php if ($success): ?>
@@ -826,81 +703,112 @@ $uc->close();
         <?php endif; ?>
 
         <div class="sos-grid">
-            <!-- LEFT: Report form -->
             <div class="panel">
                 <div class="panel-title">
-                    <span class="pt-ico"><i class="fa-solid fa-triangle-exclamation"></i></span>
-                    Send an SOS Request
+                    <span class="pt-ico"><i class="fa-solid fa-person-circle-question"></i></span>
+                    Missing Student Report
                 </div>
                 <p class="panel-sub">
-                    For immediate life danger, call 999 first. This form also alerts the on-duty campus rescue team so help can be dispatched to your exact location.
+                    Provide as much detail as possible to help identify and locate the student quickly.
                 </p>
 
                 <form method="POST">
                     <div class="mb-3">
-                        <label class="form-label">Emergency Type</label>
-                        <select name="emergency_type" class="form-select w-100" required>
-                            <option value="">Choose type</option>
-                            <?php foreach ($typeLabels as $value => $label): ?>
-                                <option value="<?php echo e($value); ?>"><?php echo e($label); ?></option>
-                            <?php endforeach; ?>
+                        <label class="form-label">Student's Full Name</label>
+                        <input type="text" name="student_name" class="form-control w-100" required
+                               placeholder="e.g. Rahim Uddin">
+                    </div>
+
+                    <div class="row-2 mb-3">
+                        <div>
+                            <label class="form-label">Student ID (if known)</label>
+                            <input type="text" name="student_id_number" class="form-control w-100"
+                                   placeholder="e.g. 2021-CSE-045">
+                        </div>
+                        <div>
+                            <label class="form-label">Age (if known)</label>
+                            <input type="number" name="age" min="1" max="120" class="form-control w-100" placeholder="e.g. 20">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Gender</label>
+                        <select name="gender" class="form-select w-100">
+                            <option value="">Prefer not to specify</option>
+                            <option value="male">Male</option>
+                            <option value="female">Female</option>
+                            <option value="other">Other</option>
                         </select>
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label">Exact Location on Campus</label>
-                        <input type="text" name="address" class="form-control w-100" required
-                               placeholder="e.g. Library 2nd Floor, Block C, near Room 305">
+                        <label class="form-label">Physical Description / What They Were Wearing</label>
+                        <textarea name="description" class="form-control w-100" rows="3" required
+                                  placeholder="Height, build, clothing, any identifying features..."></textarea>
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label">What's happening?</label>
-                        <textarea name="description" class="form-control w-100" rows="4" required
-                                  placeholder="Briefly describe the injury/illness or situation..."></textarea>
+                        <label class="form-label">Last Seen Location</label>
+                        <input type="text" name="last_seen_location" class="form-control w-100" required
+                               placeholder="e.g. Central Library, near the main gate">
                     </div>
 
-                    <div class="mb-3 life-check">
-                        <input type="checkbox" name="life_threatening" id="lifeThreatening" value="1">
-                        <label for="lifeThreatening">This is life-threatening / needs help right now</label>
+                    <div class="mb-3">
+                        <label class="form-label">Last Seen Date &amp; Time</label>
+                        <input type="datetime-local" name="last_seen_at" class="form-control w-100" required>
+                    </div>
+
+                    <div class="row-2 mb-3">
+                        <div>
+                            <label class="form-label">Your Relationship to the Student</label>
+                            <input type="text" name="reporter_relationship" class="form-control w-100" required
+                                   placeholder="e.g. Friend, Classmate, Teacher">
+                        </div>
+                        <div>
+                            <label class="form-label">Your Contact Number</label>
+                            <input type="text" name="reporter_contact" class="form-control w-100" required
+                                   placeholder="e.g. 01XXXXXXXXX">
+                        </div>
                     </div>
 
                     <button type="submit" class="btn-sos">
-                        <i class="fa-solid fa-paper-plane"></i> Send SOS Request
+                        <i class="fa-solid fa-paper-plane"></i> Submit Report
                     </button>
                 </form>
             </div>
 
-            <!-- RIGHT: Recent requests -->
             <div class="panel">
                 <div class="panel-title">
                     <span class="pt-ico"><i class="fa-solid fa-clock-rotate-left"></i></span>
-                    My Recent Requests
+                    My Submitted Reports
                 </div>
-                <p class="panel-sub">Status of the emergency requests you've sent.</p>
+                <p class="panel-sub">Track the review status of reports you've submitted.</p>
 
-                <?php if (!empty($myRequests)): ?>
-                    <?php foreach ($myRequests as $req): ?>
+                <?php if (!empty($myReports)): ?>
+                    <?php foreach ($myReports as $r): ?>
                         <div class="req-item">
                             <div class="req-head">
-                                <span class="req-type"><?php echo e($typeLabels[$req['request_type']] ?? ucfirst($req['request_type'])); ?></span>
-                                <span class="pill <?php echo requestStatusClass($req['status']); ?>">
-                                    <?php echo e(ucfirst($req['status'])); ?>
+                                <span class="req-type"><?php echo e($r['student_name']); ?></span>
+                                <span class="pill <?php echo reportStatusClass($r['status']); ?>">
+                                    <?php echo e(ucfirst($r['status'])); ?>
                                 </span>
                             </div>
-                            <div class="req-desc"><?php echo e($req['description']); ?></div>
+                            <div class="req-desc">
+                                <i class="fa-solid fa-location-dot"></i> <?php echo e($r['last_seen_location']); ?>
+                                &nbsp;·&nbsp; Last seen <?php echo e(date('M j, Y H:i', strtotime($r['last_seen_at']))); ?>
+                            </div>
+                            <?php if (!empty($r['review_notes'])): ?>
+                                <div class="req-meta"><i class="fa-solid fa-note-sticky"></i> <?php echo e($r['review_notes']); ?></div>
+                            <?php endif; ?>
                             <div class="req-meta">
-                                <span><i class="fa-solid fa-location-dot"></i> <?php echo e($req['address']); ?></span>
-                                <span class="pill <?php echo requestPriorityClass($req['priority']); ?>">
-                                    <?php echo e(ucfirst($req['priority'])); ?>
-                                </span>
-                                <span><?php echo e($req['created_at']); ?></span>
+                                <span>Submitted <?php echo e($r['created_at']); ?></span>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
                     <div class="no-req">
                         <i class="fa-solid fa-circle-check"></i>
-                        <p>No emergency requests sent yet.</p>
+                        <p>You haven't submitted any reports yet.</p>
                     </div>
                 <?php endif; ?>
             </div>

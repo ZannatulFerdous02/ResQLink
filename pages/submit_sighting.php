@@ -2,16 +2,65 @@
 session_start();
 require_once __DIR__ . "/../DB/db.php";
 
-// Public emergency info: finding a shelter must NOT require login. Logged-in
-// users still get their personalised shell; guests get safe defaults below.
-$is_guest = !isset($_SESSION['user_id']);
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
 
-$user_id = (int)($_SESSION['user_id'] ?? 0);
+$user_id = (int) $_SESSION['user_id'];
+$role_id = (int)($_SESSION['role_id'] ?? 0);
+
+function e($value)
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+
+$report_id = (int)($_GET['id'] ?? $_POST['report_id'] ?? 0);
+if ($report_id <= 0) {
+    header("Location: missing_students.php");
+    exit;
+}
+
+$stmt = $conn->prepare("SELECT id, student_name, status FROM missing_student_reports WHERE id = ?");
+$stmt->bind_param("i", $report_id);
+$stmt->execute();
+$report = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+
+if (!$report || $report['status'] !== 'approved') {
+    header("Location: missing_students.php");
+    exit;
+}
+
+$success = '';
+$error = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $location = trim($_POST['location'] ?? '');
+    $sighted_at = trim($_POST['sighted_at'] ?? '');
+    $notes = trim($_POST['notes'] ?? '');
+
+    if ($location === '' || $sighted_at === '') {
+        $error = "Please fill in the location and time of the sighting.";
+    } else {
+        $ins = $conn->prepare("
+            INSERT INTO missing_student_sightings (report_id, sighted_by, location, sighted_at, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, NOW())
+        ");
+        $ins->bind_param("iisss", $report_id, $user_id, $location, $sighted_at, $notes);
+        if ($ins->execute()) {
+            header("Location: view_missing_student.php?id=" . $report_id . "&sighting=1");
+            exit;
+        } else {
+            $error = "Something went wrong. Please try again.";
+        }
+        $ins->close();
+    }
+}
 
 // Session/user info for dashboard shell
 $username_raw = $_SESSION['full_name'] ?? 'User';
 $username = htmlspecialchars($username_raw, ENT_QUOTES, 'UTF-8');
-$role_id = (int)($_SESSION['role_id'] ?? 0);
 
 if ($role_id === 2) {
     $role = 'admin';
@@ -35,14 +84,15 @@ $role_labels = [
 $role_label = $role_labels[$role] ?? 'User';
 $initials = strtoupper(substr($username_raw, 0, 1));
 
-// Unread alerts count for sidebar badge
 $unread_count = 0;
-$uc = $conn->query("SELECT COUNT(*) AS c FROM alert_notifications WHERE user_id = $user_id AND is_read = 0");
-if ($uc && $ucr = $uc->fetch_assoc()) {
+$uc = $conn->prepare("SELECT COUNT(*) AS c FROM alert_notifications WHERE user_id = ? AND is_read = 0");
+$uc->bind_param("i", $user_id);
+$uc->execute();
+$ucRes = $uc->get_result();
+if ($ucRes && $ucr = $ucRes->fetch_assoc()) {
     $unread_count = (int)$ucr['c'];
 }
-
-$result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
+$uc->close();
 ?>
 
 <!DOCTYPE html>
@@ -50,23 +100,22 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Find Shelter - ResQLink</title>
+    <title>Report a Sighting - ResQLink</title>
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
             --accent: #2e7d32;
             --accent-dark: #1b5e20;
             --accent-light: #e8f5e9;
+            --warn: #b45309;
+            --warn-dark: #92400e;
+            --warn-light: #fffbeb;
             --sidebar-width: 265px;
             --bg: #f0f2f5;
             --white: #ffffff;
@@ -87,7 +136,6 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
 
         a { color: inherit; }
 
-        /* ---------- Sidebar ---------- */
         .sidebar {
             width: var(--sidebar-width);
             background: var(--white);
@@ -121,18 +169,10 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             place-items: center;
         }
 
-        .brand-name {
-            font-size: 18px;
-            font-weight: 800;
-        }
-
+        .brand-name { font-size: 18px; font-weight: 800; }
         .brand-name span { color: var(--accent); }
 
-        .sidebar-nav {
-            flex: 1;
-            padding: 16px 12px;
-            overflow-y: auto;
-        }
+        .sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }
 
         .nav-label {
             display: block;
@@ -157,8 +197,7 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             text-decoration: none;
         }
 
-        .nav-link:hover,
-        .nav-link.active {
+        .nav-link:hover, .nav-link.active {
             background: var(--accent-light);
             color: var(--accent);
         }
@@ -174,14 +213,9 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             border-radius: 20px;
         }
 
-        .sidebar-footer {
-            padding: 14px 12px;
-            border-top: 1px solid var(--border);
-        }
-
+        .sidebar-footer { padding: 14px 12px; border-top: 1px solid var(--border); }
         .logout { color: #dc2626; }
 
-        /* ---------- Main ---------- */
         .main {
             margin-left: var(--sidebar-width);
             width: calc(100% - var(--sidebar-width));
@@ -204,11 +238,7 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
         .topbar-title h1 { font-size: 17px; font-weight: 800; }
         .topbar-title p { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-        .topbar-right {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .topbar-right { display: flex; align-items: center; gap: 12px; }
 
         .icon-btn {
             width: 38px;
@@ -272,113 +302,50 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             cursor: pointer;
         }
 
-        .content { padding: 28px; }
-
-        .page-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-
-        .page-head h2 {
-            font-size: 20px;
-            font-weight: 800;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .page-head h2 .ph-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
-            background: var(--accent);
-            color: #fff;
-            display: grid;
-            place-items: center;
-            font-size: 16px;
-        }
-
-        .head-actions {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .btn-smart {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 18px;
-            border-radius: 10px;
-            background: var(--accent);
-            color: #fff;
-            font-size: 13px;
-            font-weight: 700;
-            text-decoration: none;
-            transition: all .2s ease;
-        }
-
-        .btn-smart:hover {
-            background: var(--accent-dark);
-            color: #fff;
-            transform: translateY(-2px);
-        }
+        .content { padding: 28px; max-width: 640px; }
 
         .back-btn {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 10px 18px;
-            border-radius: 10px;
-            background: var(--white);
-            border: 1px solid var(--border);
-            color: var(--text);
             font-size: 13px;
             font-weight: 700;
+            color: var(--muted);
             text-decoration: none;
+            margin-bottom: 18px;
         }
 
-        .back-btn:hover {
-            background: var(--accent-light);
-            color: var(--accent);
-            border-color: var(--accent);
+        .back-btn:hover { color: var(--warn); }
+
+        .flash-error {
+            padding: 13px 18px;
+            border-radius: 10px;
+            font-size: 13.5px;
+            font-weight: 600;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
         }
 
-        /* ---------- Shelter Cards ---------- */
-        .shelters-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-            gap: 18px;
-        }
-
-        .shelter-card {
+        .panel {
             background: var(--white);
             border: 1px solid var(--border);
-            border-left: 5px solid var(--accent);
             border-radius: var(--radius);
-            padding: 20px;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, .06);
-            transition: transform .2s, box-shadow .2s;
-        }
-
-        .shelter-card:hover {
-            transform: translateY(-4px);
             box-shadow: var(--shadow);
+            overflow: hidden;
         }
 
-        .shelter-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 10px;
-            margin-bottom: 14px;
+        .panel-head {
+            background: var(--warn-light);
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
         }
 
-        .shelter-name {
+        .panel-head h2 {
             font-size: 16px;
             font-weight: 800;
             display: flex;
@@ -386,113 +353,54 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             gap: 10px;
         }
 
-        .shelter-name .sh-ico {
-            width: 36px;
-            height: 36px;
-            border-radius: 10px;
-            background: var(--accent-light);
-            color: var(--accent);
-            display: grid;
-            place-items: center;
-            flex-shrink: 0;
-        }
+        .panel-head p { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
 
-        .status-badge {
-            text-transform: uppercase;
-            font-size: 10px;
-            font-weight: 800;
-            letter-spacing: .05em;
-            padding: 5px 11px;
-            border-radius: 20px;
-            color: #fff;
-            white-space: nowrap;
-        }
+        .panel-body { padding: 24px; }
 
-        .st-open { background: #15803d; }
-        .st-full { background: #b91c1c; }
-        .st-closed { background: #6b7280; }
+        .form-group { margin-bottom: 18px; }
 
-        .shelter-info {
-            display: flex;
-            flex-direction: column;
-            gap: 9px;
-        }
-
-        .info-row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 13px;
-        }
-
-        .info-row i {
-            width: 30px;
-            height: 30px;
-            border-radius: 8px;
-            background: #f3f4f6;
-            color: var(--muted);
-            display: grid;
-            place-items: center;
-            flex-shrink: 0;
-        }
-
-        .info-row .label { color: var(--muted); font-weight: 600; }
-        .info-row .value { font-weight: 700; margin-left: auto; }
-
-        .capacity-bar {
-            margin-top: 14px;
-        }
-
-        .capacity-bar .cap-track {
-            height: 8px;
-            background: #e5e7eb;
-            border-radius: 20px;
-            overflow: hidden;
-        }
-
-        .capacity-bar .cap-fill {
-            height: 100%;
-            border-radius: 20px;
-            background: var(--accent);
-        }
-
-        .capacity-bar .cap-text {
-            display: flex;
-            justify-content: space-between;
-            font-size: 11px;
-            color: var(--muted);
+        .form-group label {
+            display: block;
+            font-size: 12.5px;
             font-weight: 700;
-            margin-top: 6px;
+            margin-bottom: 6px;
+            color: #374151;
         }
 
-        .avail-pill {
-            display: inline-block;
-            margin-top: 12px;
-            padding: 6px 14px;
-            border-radius: 20px;
-            background: var(--accent-light);
-            color: var(--accent-dark);
-            font-size: 12px;
-            font-weight: 800;
-        }
+        .form-group label .req { color: #dc2626; }
 
-        .empty-state {
-            background: var(--white);
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 11px 14px;
             border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 40px;
-            text-align: center;
-            color: var(--muted);
-            box-shadow: 0 1px 4px rgba(0, 0, 0, .06);
+            border-radius: 10px;
+            font-family: inherit;
+            font-size: 13.5px;
+            background: var(--bg);
         }
 
-        .empty-state i {
-            font-size: 40px;
-            color: var(--accent);
-            margin-bottom: 12px;
+        .form-group input:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: var(--warn);
+            background: #fff;
         }
 
-        /* ---------- Sidebar overlay (mobile) ---------- */
+        .form-group textarea { resize: vertical; min-height: 90px; }
+
+        .submit-btn {
+            width: 100%;
+            padding: 13px;
+            border: none;
+            border-radius: 10px;
+            background: var(--warn);
+            color: #fff;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .submit-btn:hover { background: var(--warn-dark); }
+
         .sidebar-overlay {
             display: none;
             position: fixed;
@@ -511,7 +419,6 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             .content { padding: 16px; }
             .topbar { padding: 0 16px; }
             .user-chip-role { display: none; }
-            .shelters-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -545,7 +452,7 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
 
         <span class="nav-label">Missing Students</span>
 
-        <a href="missing_students.php" class="nav-link">
+        <a href="missing_students.php" class="nav-link active">
             <i class="fa-solid fa-user-magnifying-glass"></i> Missing Student Alerts
         </a>
 
@@ -562,7 +469,7 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             <?php endif; ?>
         </a>
 
-        <a href="shelters.php" class="nav-link active">
+        <a href="shelters.php" class="nav-link">
             <i class="fa-solid fa-house-chimney"></i> Find Shelter
         </a>
 
@@ -582,15 +489,9 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
     </nav>
 
     <div class="sidebar-footer">
-        <?php if ($is_guest): ?>
-        <a href="login.php" class="nav-link logout">
-            <i class="fa-solid fa-right-to-bracket"></i> Login
-        </a>
-        <?php else: ?>
         <a href="logout.php" class="nav-link logout">
             <i class="fa-solid fa-arrow-right-from-bracket"></i> Logout
         </a>
-        <?php endif; ?>
     </div>
 </aside>
 
@@ -602,7 +503,7 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
             </button>
 
             <div class="topbar-title">
-                <h1>Find Shelter</h1>
+                <h1>Report a Sighting</h1>
                 <p><?php echo date('l, F j, Y'); ?></p>
             </div>
         </div>
@@ -630,101 +531,45 @@ $result = $conn->query("SELECT * FROM shelters ORDER BY created_at DESC");
     </header>
 
     <main class="content">
-        <div class="page-head">
-            <h2>
-                <span class="ph-icon"><i class="fa-solid fa-house-chimney"></i></span>
-                Available Shelters
-            </h2>
-            <div class="head-actions">
-                <a href="recommend_shelter.php" class="btn-smart">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Smart Shelter Recommendation
-                </a>
-                <a href="dashboard.php" class="back-btn">
-                    <i class="fa-solid fa-arrow-left"></i> Back to Dashboard
-                </a>
+        <a href="view_missing_student.php?id=<?php echo (int)$report['id']; ?>" class="back-btn">
+            <i class="fa-solid fa-arrow-left"></i> Back to Report
+        </a>
+
+        <?php if ($error): ?>
+            <div class="flash-error"><i class="fa-solid fa-circle-exclamation"></i> <?php echo e($error); ?></div>
+        <?php endif; ?>
+
+        <div class="panel">
+            <div class="panel-head">
+                <h2><i class="fa-solid fa-eye" style="color:var(--warn);"></i> Sighting for <?php echo e($report['student_name']); ?></h2>
+                <p>Share where and when you may have seen this student. Every detail helps.</p>
+            </div>
+
+            <div class="panel-body">
+                <form method="POST">
+                    <input type="hidden" name="report_id" value="<?php echo (int)$report['id']; ?>">
+
+                    <div class="form-group">
+                        <label>Location Seen <span class="req">*</span></label>
+                        <input type="text" name="location" placeholder="e.g. Near the library, Block C" required value="<?php echo isset($_POST['location']) ? e($_POST['location']) : ''; ?>">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Date &amp; Time Seen <span class="req">*</span></label>
+                        <input type="datetime-local" name="sighted_at" required value="<?php echo isset($_POST['sighted_at']) ? e($_POST['sighted_at']) : ''; ?>">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Additional Notes</label>
+                        <textarea name="notes" placeholder="Anything else you noticed - appearance, direction, who they were with, etc."><?php echo isset($_POST['notes']) ? e($_POST['notes']) : ''; ?></textarea>
+                    </div>
+
+                    <button type="submit" class="submit-btn">
+                        <i class="fa-solid fa-paper-plane"></i> Submit Sighting
+                    </button>
+                </form>
             </div>
         </div>
-
-        <?php if ($result && $result->num_rows > 0): ?>
-            <div class="shelters-grid">
-                <?php while ($row = $result->fetch_assoc()): ?>
-                    <?php
-                        $total = (int)$row['total_capacity'];
-                        $occupied = (int)$row['current_occupancy'];
-                        $available = $total - $occupied;
-                        if ($available < 0) {
-                            $available = 0;
-                        }
-                        $percent = $total > 0 ? min(100, round(($occupied / $total) * 100)) : 0;
-
-                        $status = strtolower(trim($row['status']));
-                        if ($status === 'full') {
-                            $statusClass = 'st-full';
-                        } elseif ($status === 'closed') {
-                            $statusClass = 'st-closed';
-                        } else {
-                            $statusClass = 'st-open';
-                        }
-                    ?>
-                    <div class="shelter-card">
-                        <div class="shelter-head">
-                            <div class="shelter-name">
-                                <span class="sh-ico"><i class="fa-solid fa-house-chimney"></i></span>
-                                <?php echo htmlspecialchars($row['shelter_name']); ?>
-                            </div>
-                            <span class="status-badge <?php echo $statusClass; ?>">
-                                <?php echo htmlspecialchars($row['status']); ?>
-                            </span>
-                        </div>
-
-                        <div class="shelter-info">
-                            <div class="info-row">
-                                <i class="fa-solid fa-location-dot"></i>
-                                <span class="label">Address</span>
-                                <span class="value"><?php echo htmlspecialchars($row['address']); ?></span>
-                            </div>
-
-                            <div class="info-row">
-                                <i class="fa-solid fa-city"></i>
-                                <span class="label">City</span>
-                                <span class="value"><?php echo htmlspecialchars($row['city'] ?? 'N/A'); ?></span>
-                            </div>
-
-                            <div class="info-row">
-                                <i class="fa-solid fa-users"></i>
-                                <span class="label">Total Capacity</span>
-                                <span class="value"><?php echo $total; ?></span>
-                            </div>
-
-                            <div class="info-row">
-                                <i class="fa-solid fa-user-check"></i>
-                                <span class="label">Current Occupancy</span>
-                                <span class="value"><?php echo $occupied; ?></span>
-                            </div>
-                        </div>
-
-                        <div class="capacity-bar">
-                            <div class="cap-track">
-                                <div class="cap-fill" style="width: <?php echo $percent; ?>%;"></div>
-                            </div>
-                            <div class="cap-text">
-                                <span><?php echo $percent; ?>% occupied</span>
-                                <span><?php echo $occupied; ?>/<?php echo $total; ?></span>
-                            </div>
-                        </div>
-
-                        <span class="avail-pill">
-                            <i class="fa-solid fa-door-open"></i> <?php echo $available; ?> spaces available
-                        </span>
-                    </div>
-                <?php endwhile; ?>
-            </div>
-        <?php else: ?>
-            <div class="empty-state">
-                <i class="fa-solid fa-house-circle-xmark"></i>
-                <p>No shelters found.</p>
-            </div>
-        <?php endif; ?>
     </main>
 </div>
 
